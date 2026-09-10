@@ -1,4 +1,0 @@
-# The original project used Python with RoboDK and Niryo software.
-# Exact package versions were not preserved in the final report.
-# Install the Python API corresponding to the Niryo Ned2 software/firmware
-# used by the laboratory setup before attempting hardware execution.
