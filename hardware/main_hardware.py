@@ -1,154 +1,234 @@
-"""
-Reconstructed reference implementation: Niryo Ned2 automated colour sorting station.
+"""Niryo Ned2 automated colour-sorting station.
 
-IMPORTANT:
-The original source code was not retained. This file reconstructs the documented
-program structure and control flow from the final project report. Exact Niryo API
-calls, joint positions and sensor IDs should therefore be adapted to the hardware
-and software environment before execution.
+This is a reconstructed reference implementation based on the project report
+and PyNiryo 1.2.0 documentation. It is not claimed to be the original source.
+
+Documented workflow:
+    conveyor -> IR detection -> observation pose -> vision pick ->
+    colour-specific placement -> return -> repeat
 """
 
+from __future__ import annotations
+
+import time
 from dataclasses import dataclass
-from enum import Enum
+from pathlib import Path
+from typing import Optional
+
+from pyniryo import (
+    NiryoRobot,
+    ConveyorDirection,
+    ObjectColor,
+    ObjectShape,
+    PinState,
+    PoseObject,
+)
 
 
-class Colour(Enum):
-    RED = "RED"
-    GREEN = "GREEN"
-    BLUE = "BLUE"
-    UNKNOWN = "UNKNOWN"
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 
-
-@dataclass
-class RobotConfig:
-    max_object_count: int = 6
+@dataclass(frozen=True)
+class Config:
+    robot_ip: str = "192.168.0.10"
     workspace_name: str = "W1"
-    pick_z_offset: float = -0.01
+    ir_sensor_pin: str = "A1"
+    conveyor_speed: int = 50
+    max_object_count: int = 6
+    arm_speed_percent: int = 50
+    pick_height_offset_m: float = -0.01
+    object_wait_timeout_s: float = 30.0
+    failed_pick_retry_delay_s: float = 0.5
 
 
-class RobotInterface:
-    """Abstraction over the Niryo Ned2 hardware/API used by the project."""
-
-    def connect(self):
-        raise NotImplementedError
-
-    def move_to_pose(self, pose):
-        raise NotImplementedError
-
-    def move_joints(self, joints):
-        raise NotImplementedError
-
-    def conveyor_start(self):
-        raise NotImplementedError
-
-    def conveyor_stop(self):
-        raise NotImplementedError
-
-    def digital_read(self, sensor_pin_id):
-        raise NotImplementedError
-
-    def vision_pick(self, workspace_name):
-        raise NotImplementedError
-
-    def open_gripper(self):
-        raise NotImplementedError
-
-    def close_gripper(self):
-        raise NotImplementedError
-
-    def release_object(self):
-        raise NotImplementedError
+CONFIG = Config()
 
 
-# The six joint angles and calibrated poses were recorded physically during the
-# project but were not preserved in the report. Deliberately use placeholders.
-INITIAL_JOINTS = [None, None, None, None, None, None]
-OBSERVATION_POSE = None
-PICKING_POSE = None
+# Exact drop poses / observation pose from the student project were not
+# retained in the report. Keep them in one place so the physical setup can be
+# calibrated without changing the control logic below.
+OBSERVATION_POSE: Optional[PoseObject] = None
+RED_DROP_POSE: Optional[PoseObject] = None
+GREEN_DROP_POSE: Optional[PoseObject] = None
+BLUE_DROP_POSE: Optional[PoseObject] = None
 
 SORT_POSES = {
-    Colour.RED: None,
-    Colour.GREEN: None,
-    Colour.BLUE: None,
+    ObjectColor.RED: RED_DROP_POSE,
+    ObjectColor.GREEN: GREEN_DROP_POSE,
+    ObjectColor.BLUE: BLUE_DROP_POSE,
 }
 
-SENSOR_PIN_ID = None
+
+# ---------------------------------------------------------------------------
+# Connection / calibration
+# ---------------------------------------------------------------------------
+
+def connect_and_prepare(robot: NiryoRobot, cfg: Config) -> None:
+    robot.connect(cfg.robot_ip)
+
+    if robot.need_calibration():
+        robot.calibrate_auto()
+
+    robot.set_arm_max_velocity(cfg.arm_speed_percent)
 
 
-def wait_for_object(robot: RobotInterface):
-    """Run the conveyor until the IR sensor detects an object."""
-    robot.conveyor_start()
+def validate_configuration() -> None:
+    if OBSERVATION_POSE is None:
+        raise RuntimeError(
+            "OBSERVATION_POSE is not configured. The original project report "
+            "does not contain the calibrated numeric value."
+        )
 
-    while robot.digital_read(SENSOR_PIN_ID) is True:
-        pass
-
-    robot.conveyor_stop()
-
-
-def identify_and_pick(robot: RobotInterface, workspace_name: str):
-    """Perform the documented vision-guided pick and return detected colour."""
-    detected_colour = robot.vision_pick(workspace_name)
-
-    if detected_colour is None:
-        return Colour.UNKNOWN
-
-    colour_name = str(detected_colour).upper()
-    for colour in Colour:
-        if colour.value in colour_name:
-            return colour
-
-    return Colour.UNKNOWN
+    missing = [colour.name for colour, pose in SORT_POSES.items() if pose is None]
+    if missing:
+        raise RuntimeError(
+            "Missing calibrated drop poses: " + ", ".join(missing)
+        )
 
 
-def place_object(robot: RobotInterface, colour: Colour):
-    """Move to the colour-specific sorting location and release the object."""
-    pose = SORT_POSES.get(colour)
-    if pose is None:
-        raise RuntimeError(f"Sorting pose for {colour.value} is not calibrated.")
+# ---------------------------------------------------------------------------
+# Conveyor / IR sensing
+# ---------------------------------------------------------------------------
 
-    robot.move_to_pose(pose)
-    robot.release_object()
+def wait_for_object(robot: NiryoRobot, conveyor_id, cfg: Config) -> None:
+    """Run the conveyor until the IR sensor indicates an object is present."""
+    robot.run_conveyor(
+        conveyor_id,
+        speed=cfg.conveyor_speed,
+        direction=ConveyorDirection.FORWARD,
+    )
+
+    start = time.monotonic()
+
+    try:
+        # The project report describes the sensor as HIGH while no object is
+        # detected and LOW once the object reaches the sensor.
+        while robot.digital_read(cfg.ir_sensor_pin) == PinState.HIGH:
+            if time.monotonic() - start > cfg.object_wait_timeout_s:
+                raise TimeoutError("Timed out waiting for conveyor object")
+            time.sleep(0.01)
+    finally:
+        robot.stop_conveyor(conveyor_id)
 
 
-def run_sorting_cycle(robot: RobotInterface, config: RobotConfig):
-    """Execute the documented finite sorting loop."""
+# ---------------------------------------------------------------------------
+# Camera-guided picking
+# ---------------------------------------------------------------------------
+
+def move_to_observation(robot: NiryoRobot) -> None:
+    """Move to the documented observation position above workspace W1."""
+    assert OBSERVATION_POSE is not None
+    robot.move(OBSERVATION_POSE)
+
+
+def vision_pick(robot: NiryoRobot, cfg: Config):
+    """Detect and pick an object using the Ned2 camera.
+
+    PyNiryo 1.2.0 documents vision_pick() as a combined operation that detects
+    an object, approaches it, moves to the picking height, actuates the tool,
+    and lifts the object. It returns object_found, object_shape, object_color.
+    """
+    return robot.vision_pick(
+        cfg.workspace_name,
+        height_offset=cfg.pick_height_offset_m,
+        shape=ObjectShape.ANY,
+        color=ObjectColor.ANY,
+        obs_pose=OBSERVATION_POSE,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Colour routing / placement
+# ---------------------------------------------------------------------------
+
+def place_object(robot: NiryoRobot, detected_colour: ObjectColor) -> None:
+    """Place the object into the matching calibrated colour zone."""
+    if detected_colour not in SORT_POSES:
+        raise ValueError(f"Unsupported sorting colour: {detected_colour}")
+
+    place_pose = SORT_POSES[detected_colour]
+    if place_pose is None:
+        raise RuntimeError(f"No drop pose configured for {detected_colour.name}")
+
+    robot.place(place_pose)
+
+
+# ---------------------------------------------------------------------------
+# Main station cycle
+# ---------------------------------------------------------------------------
+
+def run_sorting_station(robot: NiryoRobot, conveyor_id, cfg: Config) -> int:
+    """Execute the complete finite automated sorting cycle."""
     objects_placed = 0
+    robot.close_gripper()
 
-    robot.move_joints(INITIAL_JOINTS)
+    while objects_placed < cfg.max_object_count:
+        print(
+            f"Waiting for object {objects_placed + 1}/"
+            f"{cfg.max_object_count}..."
+        )
 
-    while objects_placed < config.max_object_count:
-        # 1. Wait for the IR sensor to detect an object on the conveyor.
-        wait_for_object(robot)
+        # 1. Wait for an object to arrive at the pick area.
+        wait_for_object(robot, conveyor_id, cfg)
 
-        # 2. Move to the observation position above the conveyor.
-        if OBSERVATION_POSE is not None:
-            robot.move_to_pose(OBSERVATION_POSE)
+        # 2. Move the camera above the calibrated picking workspace.
+        move_to_observation(robot)
 
-        # 3. Identify and pick the object using the end-effector camera.
-        colour = identify_and_pick(robot, config.workspace_name)
+        # 3. Use vision to locate and identify the object, then pick it.
+        found, shape, colour = vision_pick(robot, cfg)
 
-        if colour == Colour.UNKNOWN:
-            print("Object colour not recognised; no placement performed.")
+        if not found:
+            print("No object found in workspace; retrying.")
+            time.sleep(cfg.failed_pick_retry_delay_s)
             continue
 
-        # 4. Place in the corresponding red, green or blue area.
+        print(f"Picked object: shape={shape}, colour={colour}")
+
+        # 4. Route the object to its colour-specific destination.
         place_object(robot, colour)
         objects_placed += 1
 
-        # 5. Return to the initial configuration.
-        robot.move_joints(INITIAL_JOINTS)
+        print(
+            f"Placed object {objects_placed}/"
+            f"{cfg.max_object_count}."
+        )
 
-    robot.conveyor_stop()
+        # 5. Return to observation/start position for the next cycle.
+        move_to_observation(robot)
+
+    return objects_placed
+
+
+def main() -> None:
+    validate_configuration()
+
+    robot = NiryoRobot(ip_address=CONFIG.robot_ip)
+    conveyor_id = None
+
+    try:
+        print("Connecting to Niryo Ned2...")
+        connect_and_prepare(robot, CONFIG)
+
+        conveyor_id = robot.set_conveyor()
+
+        total = run_sorting_station(robot, conveyor_id, CONFIG)
+        print(f"Sorting complete: {total} objects placed.")
+
+    except Exception as exc:
+        print(f"Station stopped because of an error: {exc}")
+        raise
+
+    finally:
+        if conveyor_id is not None:
+            try:
+                robot.stop_conveyor(conveyor_id)
+                robot.unset_conveyor(conveyor_id)
+            except Exception:
+                pass
+
+        robot.close_connection()
 
 
 if __name__ == "__main__":
-    robot = RobotInterface()
-    robot.connect()
-
-    config = RobotConfig(
-        max_object_count=6,
-        workspace_name="W1",
-        pick_z_offset=-0.01,
-    )
-
-    run_sorting_cycle(robot, config)
+    main()
