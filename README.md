@@ -98,7 +98,7 @@ robotic-arm-station/
 6. Set the correct IR sensor pin for the laboratory wiring.
 7. Run `hardware/main_hardware.py`.
 
-The numerical poses and pin ID are intentionally not fabricated because they were not retained in the final report.
+The numerical poses and pin ID are intentionally not fabricated because they were not retained in project records.
 
 ## Running the simulation reference
 
@@ -106,7 +106,7 @@ The original project used `Niryo.rdk` and a supplied `helpers_sim.py`. Those fil
 
 ## Practical engineering lessons
 
-The project demonstrated that robot accuracy is affected by more than the motion programme itself. The final report created identifies two especially important issues:
+The project demonstrated that robot accuracy is affected by more than the motion programme itself. During the project two especially important issues were identified:
 
 - **Lighting:** changes in laboratory lighting affected camera-based picking, leading to environmental standardisation during operation.
 - **Calibration:** the gripper initially attempted to pick above the object. A small height offset was found experimentally to improve grasp reliability.
