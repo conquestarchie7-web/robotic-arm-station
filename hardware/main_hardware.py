@@ -1,7 +1,7 @@
 """Niryo Ned2 automated colour-sorting station.
 
-This is a reconstructed reference implementation based on the project report
-and PyNiryo 1.2.0 documentation. It is not claimed to be the original source.
+This is a reconstructed reference implementation based on the project records
+and PyNiryo 1.2.0 documentation. It is not the true original source.
 
 Documented workflow:
     conveyor -> IR detection -> observation pose -> vision pick ->
@@ -45,8 +45,8 @@ class Config:
 CONFIG = Config()
 
 
-# Exact drop poses / observation pose from the student project were not
-# retained in the report. Keep them in one place so the physical setup can be
+# Exact drop poses / observation pose from the project were not
+# retained. Keep them in one place so the physical setup can be
 # calibrated without changing the control logic below.
 OBSERVATION_POSE: Optional[PoseObject] = None
 RED_DROP_POSE: Optional[PoseObject] = None
@@ -102,7 +102,7 @@ def wait_for_object(robot: NiryoRobot, conveyor_id, cfg: Config) -> None:
     start = time.monotonic()
 
     try:
-        # The project report describes the sensor as HIGH while no object is
+        # Sensor is HIGH while no object is
         # detected and LOW once the object reaches the sensor.
         while robot.digital_read(cfg.ir_sensor_pin) == PinState.HIGH:
             if time.monotonic() - start > cfg.object_wait_timeout_s:
