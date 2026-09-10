@@ -1,6 +1,6 @@
 """Workspace and camera calibration utility for the Niryo Ned2.
 
-The project report states that a pointer/calibration tip was used to define the
+The project reports state that a pointer/calibration tip was used to define the
 four corners of workspace W1. PyNiryo 1.2.0 provides a direct API for saving a
 workspace from four robot poses.
 """
