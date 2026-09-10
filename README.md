@@ -1,191 +1,127 @@
 # Robotic Arm Colour Sorting Station
 
-A robotic pick-and-place sorting system developed as a university group project using a **Niryo Ned2 robot arm**, **RoboDK**, Python, an IR object-detection sensor and a camera mounted on the robot end-effector.
+Camera-guided automated colour sorting using a **Niryo Ned2**, Python, RoboDK, an IR conveyor sensor and an end-effector-mounted camera.
 
-The system detects objects arriving on a conveyor, identifies their colour using the camera, accurately picks them from a calibrated workspace, and places them into the corresponding red, green or blue sorting area.
+## Overview
 
-> **Repository note:** The original project source files were not retained. The Python programs in this repository are a reconstructed reference implementation based on the final project report, including the documented control flow, variables, calibration approach and robot operations. They are intended to communicate the engineering design and software architecture rather than claim to be the verbatim original submission.
+The system was developed first in RoboDK simulation and then implemented on the physical Niryo Ned2. Objects are transported along a conveyor, detected by an IR sensor, observed by the robot-mounted camera, picked using the calibrated workspace, and placed into the correct colour zone.
 
-## Project overview
+The central engineering problem was **accurate camera-to-robot manipulation**: the robot needed not only to identify the object's colour, but to use its camera/workspace calibration to position the gripper accurately enough for a repeatable physical grasp.
 
-The project was developed in two stages:
-
-1. **Digital simulation in RoboDK**
-2. **Physical implementation using a Niryo Ned2**
-
-The simulation was used to establish robot poses, conveyor behaviour, object detection, camera-based colour identification, picking and colour-specific placement before transferring the workflow to the physical robot.
-
-The final system was able to repeatedly:
+## Workflow
 
 ```text
-Object arrives on conveyor
-        ↓
+Conveyor running
+      ↓
 IR sensor detects object
-        ↓
+      ↓
 Conveyor stops
-        ↓
+      ↓
 Robot moves to observation pose
-        ↓
+      ↓
 End-effector camera identifies object
-and records its colour
-        ↓
-Robot moves to calibrated picking workspace
-        ↓
-Vision-guided pick
-        ↓
-Robot carries object to colour zone
-        ↓
-Red / Green / Blue placement selected
-        ↓
-Object released
-        ↓
-Robot returns to initial pose
-        ↓
-Repeat until required count reached
+      ↓
+Vision-guided pick in W1
+      ↓
+Object colour retained
+      ↓
+RED / GREEN / BLUE destination selected
+      ↓
+Object placed
+      ↓
+Return to observation pose
+      ↓
+Repeat until max_object_count
 ```
 
-The project report states that the completed system worked reliably in both simulation and hardware. The main development challenges were **robot calibration, camera lighting consistency, IR-sensor timing and the vertical offset required for accurate gripping**.
+## Key technical features
 
-## Technical focus
+### Camera-guided picking
 
-The central engineering challenge was coordinating:
+PyNiryo 1.2.0's `vision_pick()` combines camera detection, object approach, picking-height motion, gripper actuation and lifting. The implementation uses it with the calibrated `W1` workspace.
 
-- conveyor sensing,
-- camera-based object identification,
-- a calibrated robot workspace,
-- robot pose transitions,
-- gripper actuation,
-- and accurate physical pick-and-place.
+### Workspace calibration
 
-The camera was mounted on the robot end-effector, allowing the arm to observe the picking workspace and use the detected object's colour during the later placement stage.
+The picking region is represented by workspace `W1`. The report describes calibrating its four corners using the robot and a pointer/calibration tip.
+
+### Pick-height compensation
+
+The final system required a **-0.01 m height offset** because the calibration reference points were slightly above the conveyor/object surface. The value was tuned through repeated physical testing.
+
+### Sensor-driven conveyor control
+
+The conveyor runs while the IR sensor is monitored. When an object reaches the sensor, the conveyor is stopped and the robot begins the vision/pick sequence.
+
+### Deterministic colour sorting
+
+The detected object colour maps directly to a corresponding destination:
+
+```text
+RED   → red zone
+GREEN → green zone
+BLUE  → blue zone
+```
+
+## Repository structure
+
+```text
+robotic-arm-station/
+├── README.md
+├── requirements.txt
+├── hardware/
+│   ├── main_hardware.py
+│   └── calibration.py
+├── simulation/
+│   └── main_sim.py
+└── docs/
+    └── reconstruction_notes.md
+```
 
 ## Hardware
 
-The documented physical system included:
-
-- Niryo Ned2 robotic arm
+- Niryo Ned2 robot arm
 - Niryo gripper
-- Conveyor belt connected to the robot base
+- Conveyor belt
 - IR object-detection sensor
 - End-effector-mounted camera
-- Three colour-sorting zones
-- Niryo Studio for calibration and setup
-- VS Code / Python for the control program
+- Red, green and blue sorting zones
+- Niryo Studio for calibration
 
-## Software architecture
+## Running the hardware reference
 
-### Simulation
+1. Install the PyNiryo environment used by the Ned2.
+2. Set `ROBOT_IP` / `Config.robot_ip` to the robot's address.
+3. Calibrate the robot if required.
+4. Calibrate workspace `W1`.
+5. Populate `OBSERVATION_POSE` and the three colour drop poses.
+6. Set the correct IR sensor pin for the laboratory wiring.
+7. Run `hardware/main_hardware.py`.
 
-The original simulation workflow was documented as:
+The numerical poses and pin ID are intentionally not fabricated because they were not retained in the final report.
 
-```text
-simulation/
-├── main_sim.py
-├── helpers_sim.py        # supplied project helper functions
-└── Niryo.rdk             # supplied RoboDK station layout
-```
+## Running the simulation reference
 
-`main_sim.py` contained the project simulation logic. The workflow was divided into:
+The original project used `Niryo.rdk` and a supplied `helpers_sim.py`. Those files were not retained, so `simulation/main_sim.py` documents the same high-level control flow and provides explicit integration points for a RoboDK station.
 
-1. Pose definition
-2. Object placement
-3. IR/object detection
-4. Object picking
-5. Object placement
+## Practical engineering lessons
 
-### Hardware
+The project demonstrated that robot accuracy is affected by more than the motion programme itself. The final report identifies two especially important issues:
 
-The hardware implementation was documented around `main_hardware.py`, with four main areas:
+- **Lighting:** changes in laboratory lighting affected camera-based picking, leading to environmental standardisation during operation.
+- **Calibration:** the gripper initially attempted to pick above the object. A small height offset was found experimentally to improve grasp reliability.
 
-1. Definitions and movements
-2. Sorting loop
-3. Conveyor detection
-4. Object picking and placement
+The report also identifies dynamic object sensing and parallel conveyor/robot operation as future improvements.
 
-The reconstructed implementation under `hardware/` mirrors that architecture.
+## Source reconstruction note
 
-## Calibration and accuracy
+The original source code was not retained. This repository therefore distinguishes between:
 
-Calibration was a major part of the project.
+- behaviour and structure explicitly documented in the project report;
+- API calls aligned to the published PyNiryo 1.2.0 documentation;
+- configuration values that must be recovered from the original physical setup.
 
-A square workspace named `W1` was established around the picking region. The four corner positions were calibrated by moving a pointer attachment to the corresponding reference points and recording their locations.
-
-A further vertical offset was required during vision-based picking because the calibration reference points were slightly above the physical height of the objects on the conveyor.
-
-The report describes this offset as being tuned gradually through repeated testing until the gripper reached the required depth without contacting the conveyor.
-
-## Environmental sensitivity
-
-The mounted camera was sensitive to changes in lighting. Changes in room illumination could cause the robot to miss an object even when the motion code was otherwise correct.
-
-The final testing therefore controlled the environment by standardising the lighting conditions, including the number of blinds closed and lights switched on in the lab.
-
-This was an important practical lesson: **calibration and environmental conditions were part of the sensing system**, not just a setup detail.
-
-## Design choices
-
-### Finite sorting loop
-
-The system uses a configurable maximum object count:
-
-```python
-while objects_placed < max_object_count:
-    ...
-```
-
-This makes the required number of sorting cycles explicit rather than relying on an uncontrolled infinite loop.
-
-### Event-driven conveyor control
-
-The conveyor is allowed to run while the IR sensor is checked continuously. Once an object is detected, the conveyor is stopped and the robot takes over the cycle.
-
-### Vision-guided picking
-
-The camera provides object identification within the calibrated workspace. The detected colour is retained and used later to select the correct drop location.
-
-### Colour-dependent placement
-
-The sorting decision is a deterministic mapping:
-
-```text
-RED   → red sorting zone
-GREEN → green sorting zone
-BLUE  → blue sorting zone
-```
-
-## Reconstructed source
-
-The files under `simulation/` and `hardware/` are deliberately separated from any claim about the original source.
-
-The report confirms the project used:
-
-- Python
-- RoboDK
-- a Niryo Ned2
-- `main_sim.py`
-- `helpers_sim.py`
-- `main_hardware.py`
-- an IR sensor
-- a mounted camera
-- a calibrated `W1` workspace
-- a vision-pick operation
-- a height offset for successful gripping
-
-The exact original imports, API calls, joint-angle values, sensor IDs and helper-function implementation were not preserved in the available report. Where those details are required, the reconstructed source uses clearly marked placeholders.
-
-## Future improvements
-
-The original report identified two main extensions:
-
-- **Dynamic object sensing**, allowing the system to operate over a wider range of environmental conditions.
-- **Parallel conveyor/robot operation**, allowing the conveyor to prepare the next object while the robot is sorting the previous one.
-
-A further natural extension would be closed-loop verification of successful gripping and placement using camera feedback.
-
-## Project context
-
-This project was completed as part of the Heriot-Watt University **B38RO Introduction to Robotics** group project. The project involved simulation, hardware development, calibration, integration and experimental testing.
+No missing joint angles, workspace coordinates or sensor IDs have been invented.
 
 ## Technologies
 
-**Python · RoboDK · Niryo Ned2 · Computer Vision · Robot Manipulation · Pick and Place · Sensor Integration · Workspace Calibration · Conveyor Automation · Mechatronics**
+**Python · PyNiryo · RoboDK · Niryo Ned2 · Computer Vision · Robot Manipulation · Workspace Calibration · Sensor Integration · Conveyor Automation · Pick and Place**
